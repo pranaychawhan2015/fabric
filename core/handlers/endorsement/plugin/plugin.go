@@ -7,8 +7,13 @@ SPDX-License-Identifier: Apache-2.0
 package main
 
 import (
+	"crypto/x509"
+	//"encoding/pem"
 	"errors"
 	"fmt"
+	"strings"
+
+	//"io/ioutil"
 
 	"github.com/hyperledger/fabric-protos-go/peer"
 	endorsement "github.com/hyperledger/fabric/core/handlers/endorsement/api"
@@ -49,13 +54,37 @@ func (e *DefaultEndorsement) Endorse(prpBytes []byte, sp *peer.SignedProposal) (
 		return nil, nil, fmt.Errorf("could not serialize the signing identity: %v", err)
 	}
 
-	// sign the concatenation of the proposal response and the serialized endorser identity with this endorser's key
-	signature, err := signer.Sign(append(prpBytes, identityBytes...))
-	if err != nil {
-		return nil, nil, fmt.Errorf("could not sign the proposal response payload: %v", err)
+	// contents, err := ioutil.ReadFile("/home/cps16/Documents/Medical_Records/test-network/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/msp/signcerts/cert.pem")
+	// if err != nil {
+	// 	fmt.Println("could not find the file at the respective path")
+	// 	return nil, nil, fmt.Errorf("could not find the file at the respective path")
+	// }
+	// decodedData, _ := pem.Decode(identityBytes)
+	// if decodedData == nil {
+	// 	fmt.Println("could not decode the file")
+	// 	return nil, nil, fmt.Errorf("could not decode the file ")
+	// }
+	certificate, err2 := x509.ParseCertificate(identityBytes)
+	fmt.Printf("Split bytes %q\n Proposal Bytes %q\n Identity Bytes %q\n", strings.Split(string(identityBytes), "\b"), string(prpBytes), string(identityBytes))
+
+	if err2 != nil {
+		fmt.Println("could not find the Certificate")
 	}
-	endorsement := &peer.Endorsement{Signature: signature, Endorser: identityBytes}
-	return endorsement, prpBytes, nil
+	if certificate.Issuer.Organization[0] == "org1.example.com" {
+		// sign the concatenation of the proposal response and the serialized endorser identity with this endorser's key
+		fmt.Println("condition matched")
+
+		signature, err := signer.Sign(append(prpBytes, identityBytes...))
+		if err != nil {
+			return nil, nil, fmt.Errorf("could not sign the proposal response payload: %v", err)
+		}
+		// return nil, nil, fmt.Errorf("Signature %s Endorser %s", string(signature), string(identityBytes))
+		endorsement := &peer.Endorsement{Signature: signature, Endorser: identityBytes}
+		return endorsement, prpBytes, nil
+	} else {
+		fmt.Println("condition not matched")
+	}
+	return nil, nil, fmt.Errorf("condition not matched anywhere")
 }
 
 // Init injects dependencies into the instance of the Plugin

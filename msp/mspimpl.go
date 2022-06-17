@@ -241,7 +241,44 @@ func (msp *bccspmsp) getSigningIdentityFromConf(sidInfo *m.SigningIdentityInfo) 
 		return nil, errors.WithMessage(err, "getIdentityFromBytes error: Failed initializing bccspCryptoSigner")
 	}
 
-	return newSigningIdentity(idPub.(*identity).cert, idPub.(*identity).pk, peerSigner, msp)
+	signingIdentity, err := newSigningIdentity(idPub.(*identity).cert, idPub.(*identity).pk, peerSigner, msp)
+	// pkey, _ := privKey.Bytes()
+	return signingIdentity, err
+}
+
+func (msp *bccspmsp) getPrivateKeyFromConf(sidInfo *m.SigningIdentityInfo) (string, error) {
+	if sidInfo == nil {
+		return "", errors.New("getIdentityFromBytes error: nil sidInfo")
+	}
+
+	// Extract the public part of the identity
+	_, pubKey, err := msp.getIdentityFromConf(sidInfo.PublicSigner)
+	if err != nil {
+		return "", err
+	}
+
+	// Find the matching private key in the BCCSP keystore
+	privKey, err := msp.bccsp.GetKey(pubKey.SKI())
+	// Less Secure: Attempt to import Private Key from KeyInfo, if BCCSP was not able to find the key
+	if err != nil {
+		mspLogger.Debugf("Could not find SKI [%s], trying KeyMaterial field: %+v\n", hex.EncodeToString(pubKey.SKI()), err)
+		if sidInfo.PrivateSigner == nil || sidInfo.PrivateSigner.KeyMaterial == nil {
+			return "", errors.New("KeyMaterial not found in SigningIdentityInfo")
+		}
+
+		pemKey, _ := pem.Decode(sidInfo.PrivateSigner.KeyMaterial)
+		if pemKey == nil {
+			return "", errors.Errorf("%s: wrong PEM encoding", sidInfo.PrivateSigner.KeyIdentifier)
+		}
+		privKey, err = msp.bccsp.KeyImport(pemKey.Bytes, &bccsp.ECDSAPrivateKeyImportOpts{Temporary: true})
+		if err != nil {
+			return "", errors.WithMessage(err, "getIdentityFromBytes error: Failed to import EC private key")
+		}
+	}
+
+	// get the peer signer
+	bytes, _ := privKey.Bytes()
+	return string(bytes), nil
 }
 
 // Setup sets up the internal data structures

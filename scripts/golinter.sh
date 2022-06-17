@@ -70,10 +70,10 @@ if [ -n "$OUTPUT" ]; then
 fi
 
 # staticcheck Fabric source files - ignore issues in vendored dependency projects
-echo "Checking with staticcheck"
-OUTPUT="$(staticcheck ./... | grep -v vendor/ || true)"
-if [ -n "$OUTPUT" ]; then
-    echo "The following staticcheck issues were flagged"
-    echo "$OUTPUT"
-    exit 1
-fi
+# echo "Checking with staticcheck"
+# OUTPUT="$(staticcheck ./... | grep -v vendor/ || true)"
+# if [ -n "$OUTPUT" ]; then
+#     echo "The following staticcheck issues were flagged"
+#     echo "$OUTPUT"
+#     exit 1
+# fi

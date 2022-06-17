@@ -19,20 +19,22 @@ RUN apk add --no-cache \
 	git \
 	make \
 	musl-dev
-ADD . $GOPATH/src/github.com/hyperledger/fabric
-WORKDIR $GOPATH/src/github.com/hyperledger/fabric
+ADD . /home/cps16/go/src/fabric
+#WORKDIR /home/cps16/go/src/fabric/build/bin
+WORKDIR /home/cps16/go/src/fabric
 
 FROM golang as orderer
 ARG GO_TAGS
 RUN make orderer GO_TAGS=${GO_TAGS}
 
+
 FROM base
 ENV FABRIC_CFG_PATH /etc/hyperledger/fabric
 VOLUME /etc/hyperledger/fabric
 VOLUME /var/hyperledger
-COPY --from=orderer /go/src/github.com/hyperledger/fabric/build/bin /usr/local/bin
-COPY --from=orderer /go/src/github.com/hyperledger/fabric/sampleconfig/msp ${FABRIC_CFG_PATH}/msp
-COPY --from=orderer /go/src/github.com/hyperledger/fabric/sampleconfig/orderer.yaml ${FABRIC_CFG_PATH}
-COPY --from=orderer /go/src/github.com/hyperledger/fabric/sampleconfig/configtx.yaml ${FABRIC_CFG_PATH}
+COPY --from=orderer /home/cps16/go/src/fabric/build/bin /usr/local/bin
+COPY --from=orderer /home/cps16/go/src/fabric/sampleconfig/msp ${FABRIC_CFG_PATH}/msp
+COPY --from=orderer /home/cps16/go/src/fabric/sampleconfig/orderer.yaml ${FABRIC_CFG_PATH}
+COPY --from=orderer /home/cps16/go/src/fabric/sampleconfig/configtx.yaml ${FABRIC_CFG_PATH}
 EXPOSE 7050
 CMD ["orderer"]

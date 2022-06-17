@@ -8,7 +8,10 @@ package endorser
 
 import (
 	"context"
+	// "crypto/x509"
+	// "encoding/pem"
 	"fmt"
+	"io/ioutil"
 	"strconv"
 	"time"
 
@@ -21,7 +24,10 @@ import (
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/core/chaincode/lifecycle"
 	"github.com/hyperledger/fabric/core/common/ccprovider"
+	"github.com/hyperledger/fabric/core/config"
 	"github.com/hyperledger/fabric/core/ledger"
+	"github.com/hyperledger/fabric/core/peer"
+
 	"github.com/hyperledger/fabric/internal/pkg/identity"
 	"github.com/hyperledger/fabric/msp"
 	"github.com/hyperledger/fabric/protoutil"
@@ -95,8 +101,9 @@ type Channel struct {
 
 // Endorser provides the Endorser service ProcessProposal
 type Endorser struct {
-	ChannelFetcher         ChannelFetcher
-	LocalMSP               msp.IdentityDeserializer
+	ChannelFetcher ChannelFetcher
+	LocalMSP       msp.IdentityDeserializer
+
 	PrivateDataDistributor PrivateDataDistributor
 	Support                Support
 	PvtRWSetAssembler      PvtRWSetAssembler
@@ -182,6 +189,25 @@ func (e *Endorser) simulateProposal(txParams *ccprovider.TransactionParams, chai
 		"channel", txParams.ChannelID,
 		"chaincode", chaincodeName,
 	}
+
+	// contents, err := ioutil.ReadFile("/home/cps16/Documents/Medical_Records/test-network/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/msp/signcerts/cert.pem")
+
+	// if err == nil {
+	// 	pem1, err2 := pem.Decode(contents)
+	// 	if err2 == nil {
+	// 		cert0org1, err3 := x509.ParseCertificate(pem1.Bytes)
+	// 		if err3 != nil {
+	// 			return &pb.Response{Status: 500, Message: err3.Error()}, nil, nil, nil, nil
+	// 		} else {
+	// 			return &pb.Response{Status: 500, Message: fmt.Sprintf("attr %s public key: %v", string(cert0org1.Extensions[5].Value), cert0org1.PublicKey)}, nil, nil, nil, nil
+	// 		}
+	// 	} else {
+	// 		return &pb.Response{Status: 500, Message: fmt.Sprintf("Error 2 '%s'", err2)}, nil, nil, nil, nil
+	// 	}
+	// }
+	// if err != nil {
+	// 	return &pb.Response{Status: 500, Message: err.Error()}, nil, nil, nil, nil
+	// }
 
 	// ---3. execute the proposal and get simulation results
 	res, ccevent, err := e.callChaincode(txParams, chaincodeInput, chaincodeName)
@@ -307,6 +333,7 @@ func (e *Endorser) ProcessProposal(ctx context.Context, signedProp *pb.SignedPro
 	e.Metrics.ProposalsReceived.Add(1)
 
 	addr := util.ExtractRemoteAddress(ctx)
+	// certificates := util.ExtractCertificatesFromContext(ctx)
 	endorserLogger.Debug("request from", addr)
 
 	// variables to capture proposal duration metric
@@ -324,6 +351,30 @@ func (e *Endorser) ProcessProposal(ctx context.Context, signedProp *pb.SignedPro
 		channel = e.ChannelFetcher.Channel(up.ChannelID())
 		if channel == nil {
 			return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: fmt.Sprintf("channel '%s' not found", up.ChannelHeader.ChannelId)}}, nil
+		}
+		if up.ChannelHeader.ChannelId == "mychannel" {
+			Config, err := peer.GlobalConfig()
+			if err != nil {
+				return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: fmt.Sprintf("Errors '%s'", err)}}, nil
+			}
+			dockerCertPath := config.GetPath(Config.OperationsTLSCertFile)
+			dockerCert, err := ioutil.ReadFile(dockerCertPath)
+			if err != nil {
+				return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: fmt.Sprintf("Docker Cert Error '%s'", err)}}, nil
+			}
+			dockerKeyPath := config.GetPath(Config.OperationsTLSKeyFile)
+			dockerKey, err := ioutil.ReadFile(dockerKeyPath)
+			if err != nil {
+				return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: fmt.Sprintf("Docker Key Error '%s'", err)}}, nil
+			}
+
+			dockerCAPath := config.GetPath(Config.DockerCA)
+			dockerCA, err := ioutil.ReadFile(dockerCAPath)
+			if err != nil {
+				return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: fmt.Sprintf("Docker CA Error '%s'", err)}}, nil
+			}
+
+			return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: fmt.Sprintf("Docker Cert '%s' docker key '%s' docker ca '%s'", string(dockerCert), string(dockerKey), string(dockerCA))}}, nil
 		}
 	} else {
 		channel = &Channel{
@@ -347,12 +398,16 @@ func (e *Endorser) ProcessProposal(ctx context.Context, signedProp *pb.SignedPro
 		e.Metrics.ProposalDuration.With(meterLabels...).Observe(time.Since(startTime).Seconds())
 	}()
 
-	pResp, err := e.ProcessProposalSuccessfullyOrError(up)
+	pResp, err := e.ProcessProposalSuccessfullyOrError(up, addr)
 	if err != nil {
 		endorserLogger.Warnw("Failed to invoke chaincode", "channel", up.ChannelHeader.ChannelId, "chaincode", up.ChaincodeName, "error", err.Error())
 		// Return a nil error since clients are expected to look at the ProposalResponse response status code (500) and message.
 		return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: err.Error()}}, nil
 	}
+	// certificate := util.ExtractCertificateFromContext(ctx)
+	// if up.ChannelHeader.ChannelId == "mychannel" {
+	// 	return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: fmt.Sprintf("MSP ID '%s'", string(certificate.Extensions[5].Value))}}, nil
+	// }
 
 	if pResp.Endorsement != nil || up.ChannelHeader.ChannelId == "" {
 		// We mark the tx as successful only if it was successfully endorsed, or
@@ -366,7 +421,7 @@ func (e *Endorser) ProcessProposal(ctx context.Context, signedProp *pb.SignedPro
 	return pResp, nil
 }
 
-func (e *Endorser) ProcessProposalSuccessfullyOrError(up *UnpackedProposal) (*pb.ProposalResponse, error) {
+func (e *Endorser) ProcessProposalSuccessfullyOrError(up *UnpackedProposal, addr string) (*pb.ProposalResponse, error) {
 	txParams := &ccprovider.TransactionParams{
 		ChannelID:  up.ChannelHeader.ChannelId,
 		TxID:       up.ChannelHeader.TxId,
@@ -375,6 +430,16 @@ func (e *Endorser) ProcessProposalSuccessfullyOrError(up *UnpackedProposal) (*pb
 	}
 
 	logger := decorateLogger(endorserLogger, txParams)
+
+	// ChannelHeader   *common.ChannelHeader
+	// Input           *peer.ChaincodeInput
+	// Proposal        *peer.Proposal
+	// SignatureHeader *common.SignatureHeader
+	// SignedProposal  *peer.SignedProposal
+	// ProposalHash    []byte
+	// if up.ChannelHeader.ChannelId == "mychannel" {
+	// 	return nil, errors.WithMessagef(nil, "Address '%s' Certificate Attr: '%s' public Key: '%v' ", address, string(cert.Extensions[5].Value), cert.PublicKey)
+	// }
 
 	if acquireTxSimulator(up.ChannelHeader.ChannelId, up.ChaincodeName) {
 		txSim, err := e.Support.GetTxSimulator(up.ChannelID(), up.TxID())
