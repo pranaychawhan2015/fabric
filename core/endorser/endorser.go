@@ -11,7 +11,7 @@ import (
 	// "crypto/x509"
 	// "encoding/pem"
 	"fmt"
-	"io/ioutil"
+	//"io/ioutil"
 	"strconv"
 	"time"
 
@@ -24,9 +24,10 @@ import (
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/core/chaincode/lifecycle"
 	"github.com/hyperledger/fabric/core/common/ccprovider"
-	"github.com/hyperledger/fabric/core/config"
+
+	//"github.com/hyperledger/fabric/core/config"
 	"github.com/hyperledger/fabric/core/ledger"
-	"github.com/hyperledger/fabric/core/peer"
+	//"github.com/hyperledger/fabric/core/peer"
 
 	"github.com/hyperledger/fabric/internal/pkg/identity"
 	"github.com/hyperledger/fabric/msp"
@@ -352,30 +353,30 @@ func (e *Endorser) ProcessProposal(ctx context.Context, signedProp *pb.SignedPro
 		if channel == nil {
 			return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: fmt.Sprintf("channel '%s' not found", up.ChannelHeader.ChannelId)}}, nil
 		}
-		if up.ChannelHeader.ChannelId == "mychannel" {
-			Config, err := peer.GlobalConfig()
-			if err != nil {
-				return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: fmt.Sprintf("Errors '%s'", err)}}, nil
-			}
-			dockerCertPath := config.GetPath(Config.OperationsTLSCertFile)
-			dockerCert, err := ioutil.ReadFile(dockerCertPath)
-			if err != nil {
-				return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: fmt.Sprintf("Docker Cert Error '%s'", err)}}, nil
-			}
-			dockerKeyPath := config.GetPath(Config.OperationsTLSKeyFile)
-			dockerKey, err := ioutil.ReadFile(dockerKeyPath)
-			if err != nil {
-				return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: fmt.Sprintf("Docker Key Error '%s'", err)}}, nil
-			}
+		// if up.ChannelHeader.ChannelId == "mychannel" {
+		// 	Config, err := peer.GlobalConfig()
+		// 	if err != nil {
+		// 		return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: fmt.Sprintf("Errors '%s'", err)}}, nil
+		// 	}
+		// 	dockerCertPath := config.GetPath(Config.OperationsTLSCertFile)
+		// 	dockerCert, err := ioutil.ReadFile(dockerCertPath)
+		// 	if err != nil {
+		// 		return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: fmt.Sprintf("Docker Cert Error '%s'", err)}}, nil
+		// 	}
+		// 	dockerKeyPath := config.GetPath(Config.OperationsTLSKeyFile)
+		// 	dockerKey, err := ioutil.ReadFile(dockerKeyPath)
+		// 	if err != nil {
+		// 		return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: fmt.Sprintf("Docker Key Error '%s'", err)}}, nil
+		// 	}
 
-			dockerCAPath := config.GetPath(Config.DockerCA)
-			dockerCA, err := ioutil.ReadFile(dockerCAPath)
-			if err != nil {
-				return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: fmt.Sprintf("Docker CA Error '%s'", err)}}, nil
-			}
+		// 	dockerCAPath := config.GetPath(Config.DockerCA)
+		// 	dockerCA, err := ioutil.ReadFile(dockerCAPath)
+		// 	if err != nil {
+		// 		return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: fmt.Sprintf("Docker CA Error '%s'", err)}}, nil
+		// 	}
 
-			return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: fmt.Sprintf("Docker Cert '%s' docker key '%s' docker ca '%s'", string(dockerCert), string(dockerKey), string(dockerCA))}}, nil
-		}
+		// 	return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: fmt.Sprintf("Docker Cert '%s' docker key '%s' docker ca '%s'", string(dockerCert), string(dockerKey), string(dockerCA))}}, nil
+		// }
 	} else {
 		channel = &Channel{
 			IdentityDeserializer: e.LocalMSP,

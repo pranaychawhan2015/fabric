@@ -12,7 +12,10 @@ RUN apk add --no-cache tzdata
 # - docker run --rm debian:stretch grep '^hosts:' /etc/nsswitch.conf
 RUN echo 'hosts: files dns' > /etc/nsswitch.conf
 
+
 FROM golang:${GO_VER}-alpine${ALPINE_VER} as golang
+
+
 RUN apk add --no-cache \
 	bash \
 	binutils-gold \
