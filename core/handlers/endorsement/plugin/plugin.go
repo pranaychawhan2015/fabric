@@ -53,6 +53,7 @@ func (e *DefaultEndorsement) Endorse(prpBytes []byte, sp *peer.SignedProposal) (
 	if err != nil {
 		return nil, nil, fmt.Errorf("could not serialize the signing identity: %v", err)
 	}
+	fmt.Println("System Chaincode New one which has established")
 
 	// contents, err := ioutil.ReadFile("/home/cps16/Documents/Medical_Records/test-network/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/msp/signcerts/cert.pem")
 	// if err != nil {

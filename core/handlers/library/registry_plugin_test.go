@@ -1,9 +1,7 @@
 /*
-Copyright SecureKey Technologies Inc. All Rights Reserved.
-
+Copyright Hitachi, Ltd. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
-
 package library
 
 import (

@@ -1,9 +1,7 @@
 /*
-Copyright IBM Corp. All Rights Reserved.
-
+Copyright Hitachi, Ltd. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
-
 package builtin_test
 
 import (

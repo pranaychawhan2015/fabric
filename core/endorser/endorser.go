@@ -7,13 +7,29 @@ SPDX-License-Identifier: Apache-2.0
 package endorser
 
 import (
+	"bytes"
 	"context"
-	// "crypto/x509"
-	// "encoding/pem"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
 	"fmt"
+
 	//"io/ioutil"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+
+	//"crypto/x509"
+	"encoding/hex"
+	//"encoding/pem"
+	"math/big"
 	"strconv"
+	"strings"
 	"time"
+
+	//"fmt"
+	endorsement "github.com/hyperledger/fabric/core/handlers/endorsement/api/identities"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric-chaincode-go/shim"
@@ -35,6 +51,12 @@ import (
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 )
+
+// type Message struct {
+// 	Name  string
+// 	Value string
+// 	Nonce string
+// }
 
 var endorserLogger = flogging.MustGetLogger("endorser")
 
@@ -87,6 +109,10 @@ type Support interface {
 
 	// GetDeployedCCInfoProvider returns ledger.DeployedChaincodeInfoProvider
 	GetDeployedCCInfoProvider() ledger.DeployedChaincodeInfoProvider
+
+	SigningIdentityForRequest(*pb.SignedProposal) (endorsement.SigningIdentity, error)
+
+	NewQueryCreator(channel string) (QueryCreator, error)
 }
 
 //go:generate counterfeiter -o fake/channel_fetcher.go --fake-name ChannelFetcher . ChannelFetcher
@@ -346,6 +372,83 @@ func (e *Endorser) ProcessProposal(ctx context.Context, signedProp *pb.SignedPro
 		endorserLogger.Warnw("Failed to unpack proposal", "error", err.Error())
 		return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: err.Error()}}, err
 	}
+	found := ""
+	if !e.Support.IsSysCC(up.ChaincodeName) {
+		signer, err := e.Support.SigningIdentityForRequest(up.SignedProposal)
+		if err != nil {
+			return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: "Not able to get the signing identity"}}, err
+		}
+		identityBytes, err := signer.Serialize()
+		if err != nil {
+			return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: "Not able to get the deserialized signing identity"}}, err
+		}
+		requiredIdentityBytes := string(identityBytes)
+		AfterString := strings.Split(requiredIdentityBytes, "-----BEGIN CERTIFICATE-----")[1]
+		BeforeString := strings.Split(AfterString, "-----END CERTIFICATE-----")[0]
+		newString := "-----BEGIN CERTIFICATE-----" + BeforeString[0:] + "-----END CERTIFICATE-----"
+		pem2, _ := pem.Decode([]byte(newString))
+		cert, err2 := x509.ParseCertificate(pem2.Bytes)
+		if err2 != nil {
+			// return nil, nil, "", errors.Errorf("Parsing Certificate Error Split bytes %s\n identity bytes %s\n Proposal Bytes %s\n signed Proposalbytes %s\n signed Signature %s\n", AfterString, string(identityBytes), string(prpBytes), string(sp.ProposalBytes), string(sp.Signature))
+			return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: "Certificate not found"}}, err2
+		}
+
+		// Pub_key2 := cert.PublicKey.(*ecdsa.PublicKey)
+		var resData map[string]map[string]string
+		for _, value := range cert.Extensions {
+			json.Unmarshal(value.Value, &resData)
+			if resData["attrs"] != nil {
+				break
+			}
+		}
+		// message = CheckEndorsers(string(up.SignedProposal.ProposalBytes), Pub_key2)
+
+		// Real Code
+		// found, msg := DecryptMessage(string(up.SignedProposal.ProposalBytes), resData)
+
+		// New Code
+		args, found := Decrypt(up.Input.Args, resData)
+
+		// QueryCreator, _ := e.Support.GetHistoryQueryExecutor()
+
+		// fmt.Println(signedMessage)
+		// fmt.Println(index)
+
+		// Real Code
+		// fmt.Println("Message", msg)
+		// if msg != "" {
+		// 	fmt.Println("Inputs before decryption")
+		// 	for i := 0; i < len(up.Input.Args); i++ {
+		// 		fmt.Println(string(up.Input.Args[i]))
+		// 	}
+		// 	fmt.Println("Inputs After decryption")
+		// 	var resData Message
+		// 	index := -1
+		// 	for j := 0; j < len(up.Input.Args); j++ {
+		// 		err := json.Unmarshal(up.Input.Args[j], &resData)
+		// 		if err == nil {
+		// 			resData.Value = msg
+		// 			index = j
+		// 			break
+		// 		}
+		// 	}
+		// 	if index != -1 {
+		// 		fmt.Println("Index", index)
+		// 		up.Input.Args[index], _ = json.Marshal(&resData)
+		// 		fmt.Println(string(up.Input.Args[index]))
+		// 	}
+		// }
+
+		// New Code
+		up.Input.Args = args
+
+		if found == "false" {
+			return &pb.ProposalResponse{Response: &pb.Response{Status: 302, Message: "Policy Not matching with this endorser"}}, nil
+		}
+		// if message == "Verification failed" {
+		// 	return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: "Signing Verification failed for client"}}, nil
+		// }
+	}
 
 	var channel *Channel
 	if up.ChannelID() != "" {
@@ -399,7 +502,7 @@ func (e *Endorser) ProcessProposal(ctx context.Context, signedProp *pb.SignedPro
 		e.Metrics.ProposalDuration.With(meterLabels...).Observe(time.Since(startTime).Seconds())
 	}()
 
-	pResp, err := e.ProcessProposalSuccessfullyOrError(up, addr)
+	pResp, err := e.ProcessProposalSuccessfullyOrError(up, addr, found)
 	if err != nil {
 		endorserLogger.Warnw("Failed to invoke chaincode", "channel", up.ChannelHeader.ChannelId, "chaincode", up.ChaincodeName, "error", err.Error())
 		// Return a nil error since clients are expected to look at the ProposalResponse response status code (500) and message.
@@ -422,12 +525,18 @@ func (e *Endorser) ProcessProposal(ctx context.Context, signedProp *pb.SignedPro
 	return pResp, nil
 }
 
-func (e *Endorser) ProcessProposalSuccessfullyOrError(up *UnpackedProposal, addr string) (*pb.ProposalResponse, error) {
+func (e *Endorser) ProcessProposalSuccessfullyOrError(up *UnpackedProposal, addr string, found string) (*pb.ProposalResponse, error) {
 	txParams := &ccprovider.TransactionParams{
 		ChannelID:  up.ChannelHeader.ChannelId,
 		TxID:       up.ChannelHeader.TxId,
 		SignedProp: up.SignedProposal,
 		Proposal:   up.Proposal,
+	}
+
+	if !e.Support.IsSysCC(up.ChaincodeName) {
+		for i := 0; i < len(up.Input.Args); i++ {
+			fmt.Println("Input Before Execution", i, string(up.Input.Args[i]))
+		}
 	}
 
 	logger := decorateLogger(endorserLogger, txParams)
@@ -472,6 +581,14 @@ func (e *Endorser) ProcessProposalSuccessfullyOrError(up *UnpackedProposal, addr
 	}
 
 	// 1 -- simulate
+	if !e.Support.IsSysCC(up.ChaincodeName) {
+		for i := 0; i < len(up.Input.Args); i++ {
+			fmt.Println("Input after Execution", i, string(up.Input.Args[i]))
+		}
+	}
+
+	// fmt.Println("Input2", up.Input.Args[2])
+
 	res, simulationResult, ccevent, ccInterest, err := e.simulateProposal(txParams, up.ChaincodeName, up.Input)
 	if err != nil {
 		return nil, errors.WithMessage(err, "error in simulation")
@@ -532,6 +649,14 @@ func (e *Endorser) ProcessProposalSuccessfullyOrError(up *UnpackedProposal, addr
 		return nil, errors.WithMessage(err, "endorsing with plugin failed")
 	}
 
+	if found != "" {
+		if found == "true" {
+			res.Message = "Successfully Decrypted the Message"
+		}
+		if found == "false" {
+			res.Message = "Decryption Failed"
+		}
+	}
 	return &pb.ProposalResponse{
 		Version:     1,
 		Endorsement: endorsement,
@@ -691,4 +816,351 @@ func CreateCCEventBytes(ccevent *pb.ChaincodeEvent) ([]byte, error) {
 
 func decorateLogger(logger *flogging.FabricLogger, txParams *ccprovider.TransactionParams) *flogging.FabricLogger {
 	return logger.With("channel", txParams.ChannelID, "txID", shorttxid(txParams.TxID))
+}
+
+func hexToPublicKey(xHex string, yHex string) *ecdsa.PublicKey {
+	// xBytes, _ := hex.DecodeString(xHex)
+	x := new(big.Int)
+	x.SetString(xHex, 16)
+
+	// yBytes, _ := hex.DecodeString(yHex)
+	// y := new(big.Int)
+	// y.SetBytes(yBytes)
+	y := new(big.Int)
+	y.SetString(yHex, 16)
+
+	pub := new(ecdsa.PublicKey)
+	pub.X = x
+	pub.Y = y
+
+	pub.Curve = elliptic.P256()
+
+	return pub
+}
+
+func CheckEndorsers(inputString string, Pub_key2 *ecdsa.PublicKey) string {
+	// if Pub_key1.X.Cmp(Pub_key2.X) == 0 && Pub_key1.Y.Cmp(Pub_key2.Y) == 0 {
+	message := ""
+	firstString := strings.Split(inputString, "sigr")
+
+	if len(firstString) > 0 {
+		{
+			secondString := strings.Split(firstString[1], "}")[0]
+			fourthString := strings.Split(secondString, ":")[1]
+
+			fifthString := strings.Split(fourthString, "sigs")[0]
+			sixthString := strings.ReplaceAll(fifthString, ",", "")
+			seventhString := sixthString[0 : len(sixthString)-1]
+			fmt.Println(seventhString)
+
+			firstStringnew := strings.Split(inputString, "sigs")
+
+			if len(firstStringnew) > 1 {
+				secondStringnew := strings.Split(firstStringnew[1], "}")[0]
+				// thirdString := strings.Split(secondString, "data")[1]
+				fourthStringnew := strings.Split(secondStringnew, ":")[1]
+				fifthStringnew := strings.Split(fourthStringnew, "pub_x")[0]
+				sixthStringnew := strings.ReplaceAll(fifthStringnew, ",", "")
+				seventhStringnew := sixthStringnew[0 : len(sixthStringnew)-1]
+				fmt.Println(seventhStringnew)
+
+				firstString1 := strings.Split(inputString, "msg")
+
+				if len(firstString1) > 1 {
+					secondString1 := strings.Split(firstString1[1], "}")[0]
+					thirdString1 := strings.Split(secondString1, ":")[1]
+
+					fmt.Println(string(thirdString1))
+
+					firstString2 := strings.Split(inputString, "pub_x")
+
+					if len(firstString2) > 1 {
+						secondString2 := strings.Split(firstString2[1], "}")[0]
+						fourthString2 := strings.Split(secondString2, ":")[1]
+						fifthString2 := strings.Split(fourthString2, "pub_y")[0]
+						sixthString2 := strings.ReplaceAll(fifthString2, ",", "")
+						seventhString2 := sixthString2[0 : len(sixthString2)-1]
+						fmt.Println(seventhString2)
+
+						firstString3 := strings.Split(inputString, "pub_y")
+
+						if len(firstString3) > 1 {
+							secondString3 := strings.Split(firstString3[1], "}")[0]
+							fourthString3 := strings.Split(secondString3, ":")[1]
+
+							fmt.Println(fourthString3)
+
+							pub_key := hexToPublicKey(seventhString2[1:len(seventhString2)-1], fourthString3[1:len(fourthString3)-1])
+							if pub_key != nil {
+								fmt.Println(pub_key)
+							}
+
+							r := new(big.Int)
+							fmt.Println(1)
+							rBytes, _ := hex.DecodeString(seventhString[1 : len(seventhString)-1])
+							r.SetBytes(rBytes)
+							fmt.Println("r", r)
+
+							s := new(big.Int)
+							fmt.Println(1)
+							sBytes, _ := hex.DecodeString(seventhStringnew[1 : len(seventhStringnew)-1])
+							s.SetBytes(sBytes)
+							fmt.Println("s", s)
+							fmt.Println(thirdString1[1 : len(thirdString1)-1])
+
+							msgBytes, err := hex.DecodeString(thirdString1[1 : len(thirdString1)-1])
+							if err != nil {
+								fmt.Println(err)
+							}
+
+							fmt.Println(msgBytes)
+							r = new(big.Int)
+							r.SetString(seventhString[1:len(seventhString)-1], 0)
+							s = new(big.Int)
+							s.SetString(seventhStringnew[1:len(seventhStringnew)-1], 0)
+							fmt.Println(r, s)
+
+							isVerified := ecdsa.Verify(pub_key, msgBytes[:], r, s)
+
+							// Verify
+
+							if isVerified {
+								message = "Verification Passed"
+							} else {
+								message = "Verification failed"
+							}
+						}
+					}
+
+				}
+
+			}
+
+		}
+	}
+	return message
+}
+
+func DecryptMessage(inputString string, attributeMap map[string]map[string]string) (string, string) {
+	state := ""
+	secondArray := strings.Split(inputString, `"Name":"message","Value":`)
+	if secondArray == nil {
+		return state, ""
+	}
+	if len(secondArray) == 1 {
+		return state, ""
+	}
+	thirdArray := strings.Split(secondArray[1], ",")
+	if thirdArray == nil {
+		return state, ""
+	}
+
+	fmt.Println(thirdArray[0])
+
+	newString := strings.ReplaceAll(thirdArray[0], `"`, "")
+
+	fmt.Println(newString)
+
+	fourthArray := strings.Split(thirdArray[1], `"Nonce":`)
+	if fourthArray == nil {
+		return state, ""
+	}
+
+	if len(fourthArray) == 1 {
+		return state, ""
+	}
+
+	fifthArray := strings.Split(fourthArray[1], `"}`)
+	if fifthArray == nil {
+		return state, ""
+	}
+
+	fmt.Println("Nonce", fifthArray[0])
+
+	nonceString := strings.ReplaceAll(fifthArray[0], `"`, "")
+	fmt.Println(nonceString)
+
+	firstArray := strings.Split(inputString, `{"policy"`)
+	secondArray1 := strings.Split(firstArray[1], "}}")
+	res := `{"policy"` + secondArray1[0] + "}}"
+	fmt.Println(res)
+	var resData map[string]map[string]*big.Int
+	err := json.Unmarshal([]byte(res), &resData)
+	fmt.Println("Res Bytes", []byte(res))
+	if err != nil {
+		byteArray := bytes.Trim([]byte(res), `\x00`)
+		json.Unmarshal(byteArray, &resData)
+		fmt.Println("Bytes After Removal", byteArray)
+		fmt.Println(err)
+	}
+	fmt.Println("Res Data", resData)
+
+	counter := big.NewInt(0)
+	actualMap := attributeMap["attrs"]
+	actualResData := resData["policy"]
+	fmt.Println("actualMap", actualMap)
+	fmt.Println("actual Res Data", actualResData)
+	for key, value := range actualResData {
+		// _, present := attributeMap["attrs"][key]
+		// if present {
+		// 	counter.Add(value[key], counter)
+		// }
+		for _, value1 := range actualMap {
+			if value1 == key {
+				counter.Add(counter, value)
+			}
+		}
+	}
+	// if counter == big.NewInt(0) {
+	// 	return state, ""
+	// }
+
+	if counter != big.NewInt(0) {
+		fmt.Println("Counter", counter.String())
+	}
+	decodeKey, err := hex.DecodeString(counter.String())
+	if err != nil {
+		state = "false"
+		fmt.Println("Decoding Error", err)
+		return state, ""
+	}
+	block, err := aes.NewCipher([]byte(decodeKey))
+	if err != nil {
+		state = "false"
+		fmt.Println("Block Error", err)
+		// panic(err.Error())
+		return state, ""
+	}
+	fmt.Println(block)
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		// panic(err.Error())
+		state = "false"
+		fmt.Println("AES Error", err)
+		return state, ""
+	}
+
+	fmt.Println(newString)
+	bytes, _ := hex.DecodeString(newString)
+	nonce, _ := hex.DecodeString(nonceString)
+	fmt.Println(bytes)
+	fmt.Println(nonce)
+	plaintext2, err := aesgcm.Open(nil, nonce, bytes, nil)
+	if err != nil {
+		fmt.Println("Not able to decrypt", err.Error())
+		state = "false"
+		return state, ""
+		// panic(err.Error())
+	}
+	state = "true"
+	fmt.Println("Plain Text Bytes", plaintext2)
+	// newPlainText :=
+	fmt.Printf("Plain Text %s", plaintext2)
+	return state, string(plaintext2)
+}
+
+func Decrypt(Inputs [][]byte, attributeMap map[string]map[string]string) ([][]byte, string) {
+	var message1 map[string]string
+	var resData map[string]map[string]*big.Int
+	index := -1
+	for i := 0; i < len(Inputs); i++ {
+		var message2 map[string]string
+		var resData2 map[string]map[string]*big.Int
+
+		err := json.Unmarshal(Inputs[i], &message2)
+		if err == nil {
+			if message2["Value"] != "" {
+				index = i
+				fmt.Println("Index", index)
+				message1 = message2
+			}
+		}
+
+		err = json.Unmarshal(Inputs[i], &resData2)
+		if err == nil {
+			if len(resData2) != 0 {
+				resData = resData2
+			}
+		}
+	}
+	fmt.Println("message", message1)
+	fmt.Println("resData", resData)
+	if message1["Value"] != "" {
+		if resData != nil {
+			counter := big.NewInt(0)
+			actualMap := attributeMap["attrs"]
+			actualResData := resData["policy"]
+			fmt.Println("actualMap", actualMap)
+			fmt.Println("Policy", actualResData)
+			for key, value := range actualResData {
+				// _, present := attributeMap["attrs"][key]
+				// if present {
+				// 	counter.Add(value[key], counter)
+				// }
+				for _, value1 := range actualMap {
+					if value1 == key {
+						counter.Add(counter, value)
+					}
+				}
+			}
+			fmt.Println("Res Data", resData)
+
+			if counter != big.NewInt(0) {
+				fmt.Println("Counter", counter.String())
+			}
+			decodeKey, err := hex.DecodeString(counter.String())
+			if err != nil {
+				// state = "false"
+				fmt.Println("Decoding Error", err)
+				return Inputs, "false"
+			}
+			block, err := aes.NewCipher([]byte(decodeKey))
+			if err != nil {
+				// state = "false"
+				fmt.Println("Block Error", err)
+				// panic(err.Error())
+				return Inputs, "false"
+			}
+			fmt.Println(block)
+			aesgcm, err := cipher.NewGCM(block)
+			if err != nil {
+				// panic(err.Error())
+				// state = "false"
+				fmt.Println("AES Error", err)
+				return Inputs, "false"
+			}
+
+			value := strings.ReplaceAll(message1["Value"], `""`, "")
+			nonce := strings.ReplaceAll(message1["Nonce"], `""`, "")
+			fmt.Println("Value before", message1["Value"])
+			fmt.Println("Nonce before", message1["Nonce"])
+
+			fmt.Println("Value after", value)
+			fmt.Println("Nonce after", nonce)
+
+			bytes, _ := hex.DecodeString(value)
+			nonceBytes, _ := hex.DecodeString(nonce)
+			fmt.Println(bytes)
+			fmt.Println(nonceBytes)
+			plaintext2, err := aesgcm.Open(nil, nonceBytes, bytes, nil)
+			if err != nil {
+				fmt.Println("Not able to decrypt", err.Error())
+				// state = "false"
+				return Inputs, "false"
+				// panic(err.Error())
+			}
+			// state = "true"
+			fmt.Println("Plain Text Bytes", plaintext2)
+			// newPlainText :=
+			fmt.Printf("Plain Text %s", plaintext2)
+			message1["Value"] = string(plaintext2)
+			res1, _ := json.Marshal(message1)
+			Inputs[index] = []byte(res1)
+
+			return Inputs, "true"
+		} else {
+			return Inputs, "true"
+		}
+	}
+	return Inputs, "true"
 }
